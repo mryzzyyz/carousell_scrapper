@@ -8,8 +8,8 @@ CAROUSELL_CONFIG = {
 
 DB_CONFIG = {
     'user': "postgres",
-    'password': "Yongze36!!",
-    'database': "carousell_laptop",
+    'password': "ABC12345",
+    'dbname': "carousell_laptop",
     'host': 'localhost',
     'port': '5432'
 }

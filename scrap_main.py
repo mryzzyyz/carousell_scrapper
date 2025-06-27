@@ -12,6 +12,9 @@ import pandas as pd
 from sqlalchemy import create_engine
 import psycopg2
 from config import CAROUSELL_CONFIG, DB_CONFIG
+import re
+
+
 
 # Configuration from config file
 SCRAP_DURATION = ["1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
@@ -44,6 +47,17 @@ def scroll_to_bottom():
 def scroll_to_top():
     driver.execute_script("window.scrollTo(0, 0);")
     time.sleep(1)  
+
+def extract_price(price_str):
+    if not price_str:
+        return None
+    # Extract digits and remove S$, commas, etc.
+    cleaned = re.sub(r"[^\d]", "", price_str)
+    return int(cleaned) if cleaned.isdigit() else None
+
+def extract_listing_id(url: str) -> str:
+    match = re.search(r'/p/[^/]+-(\d+)', url)
+    return match.group(1) if match else None
 
 # ----------------------------------------------------------------------------------------------------------
 
@@ -146,7 +160,7 @@ scroll_to_top()
 
 cards = driver.find_elements(By.XPATH, '//div[starts-with(@data-testid, "listing-card-")]')
 # Loop through all cards and extract data
-for i in range(card_num + 1):
+for i in range(card_num):
     print( "Processing card", i)
     try:
         # Optional: scroll into view to load dynamic content like price
@@ -158,7 +172,7 @@ for i in range(card_num + 1):
         title = link_elem.find_element(By.XPATH, './/p[@style="--max-line: 2;"]')
         url = link_elem.get_attribute('href')
         price_element = cards[i].find_element(By.XPATH, './/p[contains(text(),"$")]')
-        price = price_element.text if price_element else "N/A"
+        price = extract_price(price_element.text) if price_element else "N/A"
 
         try:
             condition_elem = cards[i].find_element(
@@ -173,7 +187,7 @@ for i in range(card_num + 1):
         try:
             like_element = cards[i].find_element(
                 By.XPATH,
-                './/span[contains(@class="D_lm D_ln D_lr D_lu D_lx D_lz D_lI")]'
+                './/button[@data-testid="listing-card-btn-like"]'
             )
             like_num = int(like_element.text.strip()) if like_element.text.strip().isdigit() else 0
         except: 
@@ -195,16 +209,20 @@ for i in range(card_num + 1):
 
         # print(f"Title: {title.text}, Price: {price}, Condition: {condition}, URL: {url}, Date: {listing_date}, Likes: {like_num}")
 
-        listings.append({
-            "timestamp": timestamp,
-            "listing_date": listing_date,
-            "title": title.text,
-            "price": price,
-            "condition": condition,
-            "likes": like_num,
-            "sold_status": "Available",
-            "url": url
-        })
+        if price and price >= 59:
+            listings.append({
+                "timestamp": timestamp,
+                "listing_date": listing_date,
+                "title": title.text,
+                "price": price,
+                "condition": condition,
+                "likes": like_num,
+                "sold_status": "Available",
+                "url": url
+            })
+
+        else:
+            print("Skipped listing due to likely false listing")
 
     except Exception as e:
         print("Skipped one listing:", e)
@@ -226,15 +244,16 @@ def validate_listing(listing):
 def save_to_db(listings):
     """Save validated listings to PostgreSQL database"""
     
-
     # Create SQLAlchemy engine
     engine = create_engine(f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
     
     # Convert to DataFrame and filter valid listings
     valid_listings = [listing for listing in listings if validate_listing(listing)]
     df = pd.DataFrame(valid_listings)
-    df = df[df['clean_price'].notnull()]
-    df = df[df['clean_price'] >= 59]
+    df['listing_id'] = df['url'].apply(extract_listing_id)
+    df = df[df['listing_id'].notnull()]
+    # df = df[df['price'].notnull()]
+    # df = df[df['price'] >= 59]
     
     # Save to database
     try:
@@ -255,5 +274,5 @@ def save_to_csv(listings):
     print("Appended today's listings to:", csv_file)
 
 # Save listings to database
-# save_to_db(listings)
-save_to_csv(listings)
+save_to_db(listings)
+# save_to_csv(listings)
