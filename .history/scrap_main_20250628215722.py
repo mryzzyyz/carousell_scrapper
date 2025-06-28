@@ -14,7 +14,7 @@ import psycopg2
 from config import CAROUSELL_CONFIG, DB_CONFIG
 import re
 import sqlite3
-import shutil
+
 
 
 # Configuration from config file
@@ -288,7 +288,6 @@ def validate_listing(listing):
 #     print("Appended today's listings to:", csv_file)
 
 def save_to_sqlite(listings):
-
     conn = sqlite3.connect('carousell_laptops.db')
     c = conn.cursor()
     c.execute('''
@@ -336,10 +335,6 @@ def save_to_sqlite(listings):
             f.write('%s\n' % line)
     print("Dumped database to carousell_dump.sql")
 
-    with open(os.path.join('backup', f'backup_{timestamp}.sql'), 'w', encoding='utf-8') as f:
-        for line in conn.iterdump():
-            f.write('%s\n' % line)
-    print(f"Backup saved to backup/backup_{timestamp}.sql")
     conn.close()
 
 # Save listings to database

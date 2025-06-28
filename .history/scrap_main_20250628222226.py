@@ -288,6 +288,8 @@ def validate_listing(listing):
 #     print("Appended today's listings to:", csv_file)
 
 def save_to_sqlite(listings):
+    backup_folder = 'backup'
+    backup_path = os.path.join(backup_folder, 'backup.db')
 
     conn = sqlite3.connect('carousell_laptops.db')
     c = conn.cursor()
@@ -336,10 +338,6 @@ def save_to_sqlite(listings):
             f.write('%s\n' % line)
     print("Dumped database to carousell_dump.sql")
 
-    with open(os.path.join('backup', f'backup_{timestamp}.sql'), 'w', encoding='utf-8') as f:
-        for line in conn.iterdump():
-            f.write('%s\n' % line)
-    print(f"Backup saved to backup/backup_{timestamp}.sql")
     conn.close()
 
 # Save listings to database
