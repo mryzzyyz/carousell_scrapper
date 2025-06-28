@@ -336,10 +336,10 @@ def save_to_sqlite(listings):
             f.write('%s\n' % line)
     print("Dumped database to carousell_dump.sql")
 
-    with open(os.path.join('backup', f'backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql'), 'w', encoding='utf-8') as f:
+    with open(os.path.join('backup', f'backup_{timestamp.now().strftime("%Y-%m-%d_%H-%M-%S")}.sql'), 'w', encoding='utf-8') as f:
         for line in conn.iterdump():
             f.write('%s\n' % line)
-    print(f"Backup saved to backup/backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql")
+    print(f"Backup saved to backup/backup_{timestamp.now().strftime("%Y-%m-%d_%H-%M-%S")}.sql")
     conn.close()
 
 # Save listings to database
