@@ -10,12 +10,12 @@ from datetime import datetime
 import os
 from config import CAROUSELL_CONFIG
 import sqlite3
-from helper import extract_price, save_to_sqlite
+from helper import extract_price, extract_listing_id
 
 
 
 # Configuration from config file
-SCRAP_DURATION = "2 hours ago" # ["1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
+SCRAP_DURATION = ["1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
 
 options = Options()
 options.add_argument('--headless=new')  # Use 'new' headless mode
@@ -131,7 +131,7 @@ while not stop_loading:
             # Stop scrolling if it says "2 days ago" or more
             # print(date_elem, SCRAP_DURATION[CAROUSELL_CONFIG['scrap_days']-1], date_elem == SCRAP_DURATION[CAROUSELL_CONFIG['scrap_days']-1])
             try:
-                if date_elem == SCRAP_DURATION:
+                if date_elem == "2 hours ago":
                     print("Stop scrolling — listing is too old:", date_elem)
                     stop_loading = True
                     break
@@ -175,7 +175,8 @@ for i in range(card_num):
         url = link_elem.get_attribute('href')
         price_element = cards[i].find_element(By.XPATH, './/p[contains(text(),"$")]')
         price = extract_price(price_element.text) if price_element else "N/A"
-        img = cards[i].find_element(By.XPATH, './/img[contains(@src, "https://")]')
+        img = cards[i].find_element(By.XPATH, './/img[contains(@src, "https://")]').get_attribute('src')
+        print(f"image: {img}")
 
         try:
             condition_elem = cards[i].find_element(
@@ -222,7 +223,7 @@ for i in range(card_num):
                 "likes": like_num,
                 "sold_status": "Available",
                 "url": url,
-                "img": img.text
+                "img": img
             })
 
         else:
@@ -238,6 +239,101 @@ driver.quit()
 
 
 # ------------------------------ Data Validation and Database Integration -----------------
+
+
+def validate_listing(listing):
+    """Validate required fields in a listing"""
+    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
+    return all(field in listing and listing[field] for field in required_fields)
+
+
+# def save_to_db(listings):
+#     """Save validated listings to PostgreSQL database"""
+    
+#     # Create SQLAlchemy engine
+#     engine = create_engine(f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
+    
+#     # Convert to DataFrame and filter valid listings
+#     valid_listings = [listing for listing in listings if validate_listing(listing)]
+#     df = pd.DataFrame(valid_listings)
+#     df['listing_id'] = df['url'].apply(extract_listing_id)
+#     df = df[df['listing_id'].notnull()]
+#     # df = df[df['price'].notnull()]
+#     # df = df[df['price'] >= 59]
+    
+#     # Save to database
+#     try:
+#         df.to_sql('listings', engine, if_exists='append', index=False)
+#         print(f"Successfully saved {len(valid_listings)} listings to database")
+#     except Exception as e:
+#         print(f"Error saving to database: {str(e)}")
+
+# Convert to DataFrame
+# def save_to_csv(listings):
+#     df = pd.DataFrame(listings)
+#     csv_file = f"{CAROUSELL_CONFIG['category']}_history.csv"
+#     if os.path.exists(csv_file):
+#         df.to_csv(csv_file, mode='a', index=True, header=False)
+#     else:
+#         df.to_csv(csv_file, mode='w', index=True, header=[ "date","title", "price", "condition", "likes", "url"])
+#     print("Appended today's listings to:", csv_file)
+
+def save_to_sqlite(listings):
+
+    conn = sqlite3.connect('carousell_laptops.db')
+    c = conn.cursor()
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS listings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, -- unique id for each listing
+        datetime TEXT, -- timestamp of when the listing was scraped
+        title TEXT, -- laptop title
+        price REAL,  -- in SGD
+        condition TEXT, -- brand new, like new, lightly used, well used, heavily used
+        likes INTEGER, -- number of likes
+        listing_url TEXT, -- listing url 
+        sold_status INTEGER, -- 0 for available, 1 for sold/reserved
+        sold_datetime TEXT, -- timestamp when the laptop was sold
+        description TEXT, -- laptop description
+        grading REAL, -- laptop grading
+        seller_url TEXT,
+        seller_rating REAL,
+        review_count INTEGER,
+        years_on_carousell INTEGER
+        )
+    ''')
+
+    valid_listings = [listing for listing in listings if validate_listing(listing)]
+
+    # Insert data
+    for item in valid_listings:
+        c.execute('''
+            INSERT INTO listings 
+            (datetime, title, price, condition, likes, listing_url, sold_status, img)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            timestamp.isoformat(),
+            item['title'],
+            item['price'],
+            item['condition'],
+            item['likes'],
+            item['url'],
+            0,
+            item['img']
+        ))
+
+    conn.commit()
+    print(f"Successfully saved {len(valid_listings)} listings to database")
+
+    with open('carousell_dump.sql', 'w', encoding='utf-8') as f:
+        for line in conn.iterdump():
+            f.write('%s\n' % line)
+    print("Dumped database to carousell_dump.sql")
+
+    with open(os.path.join('backup', f'backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql'), 'w', encoding='utf-8') as f:
+        for line in conn.iterdump():
+            f.write('%s\n' % line)
+    print(f"Backup saved to backup/backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql")
+    conn.close()
 
 # Save listings to database
 save_to_sqlite(listings)

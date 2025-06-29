@@ -222,7 +222,7 @@ for i in range(card_num):
                 "likes": like_num,
                 "sold_status": "Available",
                 "url": url,
-                "img": img.text
+                "img": img
             })
 
         else:

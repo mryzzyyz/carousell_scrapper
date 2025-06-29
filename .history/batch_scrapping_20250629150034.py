@@ -8,7 +8,6 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from helper import extract_price
-import re
 
 FETCH_UNTIL = 3 # Fetch listings from the last 3 days
 
@@ -36,91 +35,55 @@ def parse_listing_fields(result):
     try:
         html = result._results[0].html
         soup = BeautifulSoup(html, "html.parser")
-
-        # --- Description ---
-        description = ""
+        description = soup.find("meta", {"name": "description"})
         try:
-            meta_desc = soup.find("meta", {"name": "description"})
-            description = meta_desc["content"] if meta_desc else ""
-        except Exception as e:
-            print("❌ Description error:", e)
+            updated_price = extract_price(soup.find("meta content", {"name": "twitter:data1"}))
+        except:
+            print("❌ Could not find price")
 
-        # --- Price (fallback to None if extract fails) ---
-        updated_price = None
-        try:
-            price_elem = soup.find("meta", {"name": "twitter:data1"})
-            if price_elem and price_elem.has_attr("content"):
-                match = re.search(r"[\d,]+", price_elem["content"])
-                if match:
-                    updated_price = float(match.group(0).replace(",", ""))
-        except Exception as e:
-            print("❌ Price parsing failed:", e)
+        review_elem = soup.find("p", string=lambda t: "review" in t.lower())  # finds first <p> with "review"
+        seller_siblings = soup.find('p', string='Meet the seller').parent.find_next_siblings()
+        if seller_siblings:
+            seller_info_block = seller_siblings[0]  # Get the first block that likely contains the info
 
-        # --- Review count ---
-        review_count = None
-        try:
-            review_elem = soup.find("p", string=lambda t: t and "review" in t.lower())
-            if review_elem:
-                match = re.search(r"\((\d+)\s+reviews?\)", review_elem.text)
-                if match:
-                    review_count = int(match.group(1))
-        except Exception as e:
-            print("❌ Review count error:", e)
+            # Now do .find() on this block, not on the list
+            rating_span = seller_info_block.find('p', {"class": "D_lm M_lh D_ln M_li D_lr M_lm D_lu M_lp D_lw M_lr D_l_ M_lv D_bMw M_bIw D_bMx M_bIx D_lI"})
+            seller_rating = float(rating_span.get_text(strip=True)) if rating_span else 'Rating not found'
 
-        # --- Seller info block ---
-        seller_rating = None
-        years_on_carousell = None
-        try:
-            seller_siblings = soup.find('p', string='Meet the seller').parent.find_next_siblings()
-            if seller_siblings:
-                seller_block = seller_siblings[0]
-
-                # Seller rating
-                rating_elem = seller_block.find('p', class_=re.compile("D_bMw.*D_bMx.*"))
-                if rating_elem:
-                    match = re.search(r"[\d.]+", rating_elem.get_text(strip=True))
-                    if match:
-                        seller_rating = float(match.group(0))
-
-                # Years on Carousell
-                years_elem = seller_block.find('p', class_=re.compile("D_bMw.*D_lI"))
-                if years_elem:
-                    text = years_elem.get_text(strip=True)
-                    if "years" in text:
-                        match = re.search(r"(\d+)", text)
-                        years_on_carousell = int(match.group(1)) if match else None
-                    elif "months" in text:
-                        match = re.search(r"(\d+)", text)
-                        years_on_carousell = round(int(match.group(1)) / 12, 2) if match else None
-        except Exception as e:
-            print("❌ Seller info block error:", e)
-
-        # --- Seller URL ---
-        seller_url = ""
-        try:
-            seller_url_elem = soup.find("a", href=lambda x: x and "/u/" in x)
-            if seller_url_elem:
-                seller_url = "https://www.carousell.sg" + seller_url_elem.get("href", "")
+            years_span = seller_info_block.find('p', {"class": "D_lm M_lh D_ln M_li D_lr M_lm D_lu M_lp D_lw M_lr D_l_ M_lv D_bMw M_bIw D_lI"})
+            years_text = years_span.get_text(strip=True).split(" ") if years_span else 'Years not found'
+            print(years_text)
+            if len(years_text) == 2 and years_text[1] == "years":
+                if years_text[1] == "months":
+                    years_on_carousell = int(years_text[0]) / 12
+                years_on_carousell = int(years_text[0])
             else:
-                print("❌ Seller URL not found")
-        except Exception as e:
-            print("❌ Seller URL error:", e)
+                years_on_carousell = None
+
+        seller_url_elem = soup.find("a", href=lambda x: x and "/u/" in x)
+
+        if seller_url_elem:
+            seller_url = "https://www.carousell.sg" + seller_url_elem.get("href", "")
+        else:
+            print("❌ Could not find seller URL. Dumping HTML:")
+            seller_url = ""
+
 
         return {
             "sold_status": 1 if "Reserved" in html or "Sold" in html else 0,
             "sold_datetime": datetime.now().isoformat() if "Sold" in html else None,
-            "description": description,
+            "description": description["content"] if description else "",
             "price": updated_price,
-            "grading": None,
+            "grading": None,  # Placeholder; can be added by AI scoring
             "seller_url": seller_url,
             "seller_rating": seller_rating,
-            "review_count": review_count,
+            "review_count": int(review_elem.text.split()[0]) if review_elem else None,
             "years_on_carousell": years_on_carousell
         }
-
+    
     except Exception as e:
-        print("❌ Parsing failed completely:", e)
-        return None
+        print("❌ Parsing error:", e)
+        return {}
 
 # List of URLs to crawl
 urls = [row[0] for row in load_url_ids_list(FETCH_UNTIL)]

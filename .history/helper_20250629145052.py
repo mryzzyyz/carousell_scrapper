@@ -4,12 +4,6 @@ import os
 import pandas as pd
 from datetime import datetime
 
-timestamp = datetime.now()
-
-def validate_listing(listing):
-    """Validate required fields in a listing"""
-    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
-    return all(field in listing and listing[field] for field in required_fields)
 
 
 def extract_price(price_str):

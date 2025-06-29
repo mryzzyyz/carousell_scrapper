@@ -4,8 +4,6 @@ import os
 import pandas as pd
 from datetime import datetime
 
-timestamp = datetime.now()
-
 def validate_listing(listing):
     """Validate required fields in a listing"""
     required_fields = ['listing_date', 'title', 'price', 'condition', 'url']

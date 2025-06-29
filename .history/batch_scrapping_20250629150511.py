@@ -8,7 +8,6 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from helper import extract_price
-import re
 
 FETCH_UNTIL = 3 # Fetch listings from the last 3 days
 

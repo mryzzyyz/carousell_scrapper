@@ -1,16 +1,5 @@
 import re
 import sqlite3
-import os
-import pandas as pd
-from datetime import datetime
-
-timestamp = datetime.now()
-
-def validate_listing(listing):
-    """Validate required fields in a listing"""
-    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
-    return all(field in listing and listing[field] for field in required_fields)
-
 
 def extract_price(price_str):
     if not price_str:
@@ -127,13 +116,3 @@ def save_to_sqlite(listings):
             f.write('%s\n' % line)
     print(f"Backup saved to backup/backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql")
     conn.close()
-
-
-def save_to_csv(listings):
-    df = pd.DataFrame(listings)
-    csv_file = f"laptops_history.csv"
-    if os.path.exists(csv_file):
-        df.to_csv(csv_file, mode='a', index=True, header=False)
-    else:
-        df.to_csv(csv_file, mode='w', index=True, header=[ "date","title", "price", "condition", "likes", "url"])
-    print("Appended today's listings to:", csv_file)

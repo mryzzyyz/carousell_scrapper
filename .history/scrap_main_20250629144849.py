@@ -10,7 +10,7 @@ from datetime import datetime
 import os
 from config import CAROUSELL_CONFIG
 import sqlite3
-from helper import extract_price, save_to_sqlite
+from helper import extract_price, extract_listing_id
 
 
 
@@ -222,7 +222,7 @@ for i in range(card_num):
                 "likes": like_num,
                 "sold_status": "Available",
                 "url": url,
-                "img": img.text
+                "img": img
             })
 
         else:
@@ -238,6 +238,45 @@ driver.quit()
 
 
 # ------------------------------ Data Validation and Database Integration -----------------
+
+
+def validate_listing(listing):
+    """Validate required fields in a listing"""
+    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
+    return all(field in listing and listing[field] for field in required_fields)
+
+
+# def save_to_db(listings):
+#     """Save validated listings to PostgreSQL database"""
+    
+#     # Create SQLAlchemy engine
+#     engine = create_engine(f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
+    
+#     # Convert to DataFrame and filter valid listings
+#     valid_listings = [listing for listing in listings if validate_listing(listing)]
+#     df = pd.DataFrame(valid_listings)
+#     df['listing_id'] = df['url'].apply(extract_listing_id)
+#     df = df[df['listing_id'].notnull()]
+#     # df = df[df['price'].notnull()]
+#     # df = df[df['price'] >= 59]
+    
+#     # Save to database
+#     try:
+#         df.to_sql('listings', engine, if_exists='append', index=False)
+#         print(f"Successfully saved {len(valid_listings)} listings to database")
+#     except Exception as e:
+#         print(f"Error saving to database: {str(e)}")
+
+# Convert to DataFrame
+# def save_to_csv(listings):
+#     df = pd.DataFrame(listings)
+#     csv_file = f"{CAROUSELL_CONFIG['category']}_history.csv"
+#     if os.path.exists(csv_file):
+#         df.to_csv(csv_file, mode='a', index=True, header=False)
+#     else:
+#         df.to_csv(csv_file, mode='w', index=True, header=[ "date","title", "price", "condition", "likes", "url"])
+#     print("Appended today's listings to:", csv_file)
+
 
 # Save listings to database
 save_to_sqlite(listings)
