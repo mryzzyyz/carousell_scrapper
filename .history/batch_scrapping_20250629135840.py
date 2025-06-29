@@ -1,0 +1,212 @@
+import os
+import sys
+import psutil
+import asyncio
+import requests
+from xml.etree import ElementTree
+from typing import List
+import pandas as pd
+import sqlite3
+from datetime import datetime
+from bs4 import BeautifulSoup
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+import re
+import json
+import time
+from helper import extract_price
+
+FETCH_UNTIL = 3
+
+
+__location__ = os.path.dirname(os.path.abspath(__file__))
+__output__ = os.path.join(__location__, "output")
+
+# Append parent directory to system path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
+# Load the list of URLs to crawl from the database
+def load_url_ids_list(fetch_until):
+    # Connect to the database, fetch urls and return a list of urls
+    conn = sqlite3.connect('carousell_laptops.db')
+    c = conn.cursor()
+    c.execute(f"""SELECT listing_url, id
+              FROM listings WHERE sold_status = 0 
+              AND DATE(datetime) >= DATE('now', '-{fetch_until} days')""")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+# Extract the listing fields from the HTML
+def parse_listing_fields(result):
+    try:
+        html = result._results[0].html
+        soup = BeautifulSoup(html, "html.parser")
+        description = soup.find("meta", {"name": "description"})
+        try:
+            print(soup.find("meta", {"name": "twitter:data1"}))
+            updated_price = extract_price(soup.find("meta", {"name": "twitter:data1"}))
+        except:
+            print("❌ Could not find price")
+
+        review_elem = soup.find("p", string=lambda t: "review" in t.lower())  # finds first <p> with "review"
+        seller_siblings = soup.find('p', string='Meet the seller').parent.find_next_siblings()
+        if seller_siblings:
+            seller_info_block = seller_siblings[0]  # Get the first block that likely contains the info
+
+            # Now do .find() on this block, not on the list
+            rating_span = seller_info_block.find('p', {"class": "D_lm M_lh D_ln M_li D_lr M_lm D_lu M_lp D_lw M_lr D_l_ M_lv D_bMw M_bIw D_bMx M_bIx D_lI"})
+            seller_rating = float(rating_span.get_text(strip=True)) if rating_span else 'Rating not found'
+
+            years_span = seller_info_block.find('p', {"class": "D_lm M_lh D_ln M_li D_lr M_lm D_lu M_lp D_lw M_lr D_l_ M_lv D_bMw M_bIw D_lI"})
+            years_text = years_span.get_text(strip=True).split(" ") if years_span else 'Years not found'
+            if len(years_text) == 2 and years_text[1] == "years":
+                if years_text[1] == "months":
+                    years_on_carousell = int(years_text[0]) / 12
+                years_on_carousell = int(years_text[0])
+            else:
+                years_on_carousell = None
+
+        seller_url_elem = soup.find("a", href=lambda x: x and "/u/" in x)
+
+        if seller_url_elem:
+            seller_url = "https://www.carousell.sg" + seller_url_elem.get("href", "")
+        else:
+            print("❌ Could not find seller URL. Dumping HTML:")
+            seller_url = ""
+
+
+        return {
+            "sold_status": 1 if "Reserved" in html or "Sold" in html else 0,
+            "sold_datetime": datetime.now().isoformat() if "Sold" in html else None,
+            "description": description["content"] if description else "",
+            "price": updated_price,
+            "grading": None,  # Placeholder; can be added by AI scoring
+            "seller_url": seller_url,
+            "seller_rating": seller_rating,
+            "review_count": int(review_elem.text.split()[0]) if review_elem else None,
+            "years_on_carousell": years_on_carousell
+        }
+    except Exception as e:
+        print("❌ Parsing error:", e)
+        return {}
+
+# List of URLs to crawl
+urls = [row[0] for row in load_url_ids_list(FETCH_UNTIL)]
+ids = [row[1] for row in load_url_ids_list(FETCH_UNTIL)]
+
+# Crawl URL in batches
+async def crawl_parallel(urls: List[str], max_concurrent: int = 3):
+    print("\n=== Parallel Crawling with Browser Reuse + Memory Check ===")
+    parsed_listings = []
+    peak_memory = 0
+    process = psutil.Process(os.getpid())
+
+    def log_memory(prefix: str = ""):
+        nonlocal peak_memory
+        current_mem = process.memory_info().rss  # in bytes
+        if current_mem > peak_memory:
+            peak_memory = current_mem
+        print(f"{prefix} Current Memory: {current_mem // (1024 * 1024)} MB, Peak: {peak_memory // (1024 * 1024)} MB")
+
+    # Minimal browser config
+    browser_config = BrowserConfig(
+        headless=True,
+        verbose=False,  # corrected from 'verbos=False'
+        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
+    )
+    crawl_config = CrawlerRunConfig(cache_mode=CacheMode.BYPASS)
+
+    # Create the crawler instance
+    crawler = AsyncWebCrawler(config=browser_config)
+    await crawler.start()
+
+    try:
+        # We'll chunk the URLs in batches of 'max_concurrent'
+        success_count = 0
+        fail_count = 0
+        count = 0
+        for i in range(0, len(urls), max_concurrent):
+            batch = urls[i : i + max_concurrent]
+            tasks = []
+
+            for j, url in enumerate(batch):
+                # Unique session_id per concurrent sub-task
+                session_id = f"parallel_session_{i + j}"
+                task = crawler.arun(url=url, config=crawl_config, session_id=session_id)
+                tasks.append(task)
+
+            # Check memory usage prior to launching tasks
+            log_memory(prefix=f"Before batch {i//max_concurrent + 1}: ")
+
+            # Gather results
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Check memory usage after tasks complete
+            log_memory(prefix=f"After batch {i//max_concurrent + 1}: ")
+
+            # Evaluate results
+            for url, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    print(f"Error crawling {url}: {result}")
+                    fail_count += 1
+                elif result.success:
+                    success_count += 1
+                else:
+                    fail_count += 1
+            
+                # Parse listing fields and store in a list
+                parsed = parse_listing_fields(result)
+                listing = {
+                    "id": ids[count],  # unique id for each listing
+                    **parsed
+                }
+                parsed_listings.append(listing)
+                count += 1
+
+        print(f"\nSummary:")
+        print(f"  - Successfully crawled: {success_count}")
+        print(f"  - Failed: {fail_count}")
+
+    finally:
+        print("\nClosing crawler...")
+        await crawler.close()
+        # Final memory log
+        log_memory(prefix="Final: ")
+        print(f"\nPeak memory usage (MB): {peak_memory // (1024 * 1024)}")
+        return parsed_listings
+
+# Update the database with the listings
+def update_db(listings):
+    conn = sqlite3.connect('carousell_laptops.db')
+    cursor = conn.cursor()
+
+    # Insert listings into the database
+    for listing in listings:
+        print(f"Inserting {listing['id']} into the database...")
+
+        cursor.execute('''
+            UPDATE listings
+            SET price = ?, sold_status =?, sold_datetime =?, description =?, grading =?, seller_url =?, seller_rating =?, review_count =?, years_on_carousell =?
+            WHERE id = ?
+        ''', (listing['price'], listing['sold_status'], listing['sold_datetime'], listing['description'], listing['grading'], listing['seller_url'], listing['seller_rating'], listing['review_count'], listing['years_on_carousell'], listing['id']))
+
+    conn.commit()
+    conn.close()
+    print(f"Updated {len(listings)} listings in the database.")
+
+
+async def main():
+    if urls:
+        print(f"Found {len(urls)} URLs to crawl")
+        listings = await crawl_parallel(urls, max_concurrent=3)
+
+        print(f"Updated {len(listings)} listings in the database.")
+        update_db(listings)
+
+    else:
+        print("No URLs found to crawl")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
