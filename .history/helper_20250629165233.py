@@ -140,11 +140,11 @@ def save_to_csv(listings):
     print("Appended today's listings to:", csv_file)
 
 # Load the list of URLs to crawl from the database
-def load_from_db(fetch_until):
+def load_url_ids_list(fetch_until):
     # Connect to the database, fetch urls and return a list of urls
     conn = sqlite3.connect('carousell_laptops.db')
     c = conn.cursor()
-    c.execute(f"""SELECT *
+    c.execute(f"""SELECT listing_url, id
               FROM listings WHERE sold_status = 0 
               AND DATE(datetime) >= DATE('now', '-{fetch_until} days')""")
     rows = c.fetchall()

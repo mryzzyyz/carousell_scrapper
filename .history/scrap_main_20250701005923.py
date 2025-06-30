@@ -252,5 +252,6 @@ for scored in ai_filtered_listings:
 # ------------------------------ Data Validation and Database Integration -----------------
 
 
+
 # Save listings to database
 save_to_sqlite(filtered_listings)

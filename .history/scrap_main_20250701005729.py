@@ -242,14 +242,13 @@ driver.quit()
 
 ai_filtered_listings = ai_filter(listings, TOP_FILTER_PERCENT)
 filtered_listings = []
-for scored in ai_filtered_listings:
-    for listing in listings:
-        if scored['temp_id'] == listing['temp_id']:
-            listing['ai_grading'] = scored['score']
-            filtered_listings.append(listing)
-            break
+for i in range(len(ai_filtered_listings)):
+    if listings[i]["temp_id"] == ai_filtered_listings[i]["temp_id"]:
+        filtered_listings.append(listings[i])
+        filtered_listings[i].ai_grading = ai_filtered_listings[i]["score"]
 
 # ------------------------------ Data Validation and Database Integration -----------------
+
 
 
 # Save listings to database

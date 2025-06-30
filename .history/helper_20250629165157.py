@@ -13,11 +13,14 @@ def validate_listing(listing):
 
 
 def extract_price(price_str):
-    if not price_str:
-        return None
-    # Extract digits and remove S$, commas, etc.
-    cleaned = re.sub(r"[^\d]", "", price_str)
-    return int(cleaned) if cleaned.isdigit() else None
+        try:
+            price_elem = soup.find("meta", {"name": "twitter:data1"})
+            if price_elem and price_elem.has_attr("content"):
+                match = re.search(r"[\d,]+", price_elem["content"])
+                if match:
+                    updated_price = float(match.group(0).replace(",", ""))
+        except Exception as e:
+            print("❌ Price parsing failed:", e)
 
 
 def extract_listing_id(url: str) -> str:
@@ -140,11 +143,11 @@ def save_to_csv(listings):
     print("Appended today's listings to:", csv_file)
 
 # Load the list of URLs to crawl from the database
-def load_from_db(fetch_until):
+def load_url_ids_list(fetch_until):
     # Connect to the database, fetch urls and return a list of urls
     conn = sqlite3.connect('carousell_laptops.db')
     c = conn.cursor()
-    c.execute(f"""SELECT *
+    c.execute(f"""SELECT listing_url, id
               FROM listings WHERE sold_status = 0 
               AND DATE(datetime) >= DATE('now', '-{fetch_until} days')""")
     rows = c.fetchall()

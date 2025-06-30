@@ -16,7 +16,7 @@ from ai_process import ai_filter
 
 # Configuration from config file
 SCRAP_DURATION = "2 hours ago" # ["1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
-TOP_FILTER_PERCENT = 0.3
+
 options = Options()
 options.add_argument('--headless=new')  # Use 'new' headless mode
 options.add_argument('--disable-blink-features=AutomationControlled')
@@ -223,8 +223,7 @@ for i in range(card_num):
                 "likes": like_num,
                 "sold_status": "Available",
                 "url": url,
-                "img": img.text,
-                "ai_grading": None
+                "img": img.text
             })
 
         else:
@@ -240,17 +239,12 @@ driver.quit()
 
 # ---------- AI Filtering -----------------
 
-ai_filtered_listings = ai_filter(listings, TOP_FILTER_PERCENT)
-filtered_listings = []
-for scored in ai_filtered_listings:
-    for listing in listings:
-        if scored['temp_id'] == listing['temp_id']:
-            listing['ai_grading'] = scored['score']
-            filtered_listings.append(listing)
-            break
+ai_filtered_listings = ai_filter(listings)
+
 
 # ------------------------------ Data Validation and Database Integration -----------------
 
 
+
 # Save listings to database
-save_to_sqlite(filtered_listings)
+save_to_sqlite(listings)
