@@ -1,0 +1,2 @@
+from batch_scrapping import batch_scrapping
+from main_scrapping import main_scrapping
