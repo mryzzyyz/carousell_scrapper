@@ -1,0 +1,64 @@
+BEGIN TRANSACTION;
+CREATE TABLE listings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, -- unique id for each listing
+        datetime TEXT, -- timestamp of when the listing was scraped
+        title TEXT, -- laptop title
+        price REAL,  -- in SGD
+        condition TEXT, -- brand new, like new, lightly used, well used, heavily used
+        likes INTEGER, -- number of likes
+        listing_url TEXT, -- listing url 
+        sold_status INTEGER, -- 0 for available, 1 for sold/reserved
+        sold_datetime TEXT, -- timestamp when the laptop was sold
+        description TEXT, -- laptop description
+        grading REAL, -- laptop grading
+        seller_name TEXT,
+        seller_url TEXT,
+        seller_rating REAL,
+        review_count INTEGER,
+        years_on_carousell REAL,
+        time_to_sell INTEGER,
+        thumbnail_url TEXT,
+        category TEXT, -- laptop category
+        brand TEXT, -- laptop brand
+        model TEXT, -- laptop model
+        specifications TEXT, -- laptop specifications
+        features TEXT, -- laptop features
+        processor TEXT, -- laptop processor
+        ram TEXT, -- laptop RAM
+        storage TEXT, -- laptop storage
+        screen_size TEXT, -- laptop screen size
+        display_size TEXT, -- laptop display size
+        battery_life TEXT, -- laptop battery life
+        operating_system TEXT, -- laptop operating system
+        camera TEXT, -- laptop camera
+        dimensions TEXT, -- laptop dimensions
+        item_weight TEXT, -- laptop weight
+        warranty TEXT, -- laptop warranty
+        warranty_duration TEXT, -- laptop warranty duration
+        warranty_type TEXT, -- laptop warranty type
+        warranty_coverage TEXT, -- laptop warranty coverage
+        delivery_method TEXT, -- laptop delivery method
+        return_policy TEXT, -- laptop return policy
+        shipping_charge TEXT, -- laptop shipping charge
+        shipping_terms TEXT -- laptop shipping terms
+    );
+CREATE VIEW enriched_listings AS
+    SELECT *,
+        CAST(JULIANDAY(sold_datetime) - JULIANDAY(datetime) AS INTEGER) AS time_to_sell,
+        CAST(JULIANDAY('now') - JULIANDAY(datetime) AS INTEGER) AS days_since_posted,
+        LENGTH(title) AS title_length,
+        LENGTH(description) AS desc_length,
+        CASE WHEN seller_rating >= 4.5 AND review_count > 30 THEN 1 ELSE 0 END AS is_premium_seller,
+        CASE WHEN price < 500 THEN 1 ELSE 0 END AS is_cheap,
+        CASE
+            WHEN condition = 'Brand new' THEN 5
+            WHEN condition = 'Like new' THEN 4
+            WHEN condition = 'Lightly used' THEN 3
+            WHEN condition = 'Well used' THEN 1
+            WHEN condition = 'Heavily used' THEN 0
+            ELSE 0
+        END AS condition_score
+    FROM listings
+    WHERE sold_status = 1 AND sold_datetime IS NOT NULL;
+DELETE FROM "sqlite_sequence";
+COMMIT;
