@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from helper import extract_price
 import re
+from telebot import send_debug_message_to_telegram
 
 FETCH_UNTIL = 3 # Fetch listings from the last 3 days
 
@@ -56,46 +57,71 @@ def parse_listing_fields(result):
         except Exception as e:
             print("❌ Price parsing failed:", e)
 
-        # --- Review count ---
-        review_count = None
-        try:
-            review_elem = soup.find("p", string=lambda t: t and "review" in t.lower())
-            if review_elem:
-                match = re.search(r"\((\d+)\s+reviews?\)", review_elem.text)
-                if match:
-                    review_count = int(match.group(1))
-        except Exception as e:
-            print("❌ Review count error:", e)
-
-        # --- Seller info block ---
+        # -- Seller info block --
         seller_rating = None
         years_on_carousell = None
         try:
-            seller_siblings = soup.find('p', string='Meet the seller').parent.find_next_siblings()
-            if seller_siblings:
-                seller_block = seller_siblings[0]
+            seller_marker = soup.find('p', string='Meet the seller')
+            if seller_marker:
+                siblings = seller_marker.parent.find_next_siblings()
+                if siblings:
+                    seller_block = siblings[0]
 
-                # Seller rating
-                rating_elem = seller_block.find('p', class_=re.compile("D_bMw.*D_bMx.*"))
-                if rating_elem:
-                    match = re.search(r"[\d.]+", rating_elem.get_text(strip=True))
-                    if match:
-                        seller_rating = float(match.group(0))
+                    # Seller rating
+                    rating_elem = seller_block.find('p', class_=re.compile("D_bMw.*D_bMx.*"))
+                    if rating_elem:
+                        match = re.search(r"[\d.]+", rating_elem.get_text(strip=True))
+                        if match:
+                            seller_rating = float(match.group(0))
 
-                # Years on Carousell
-                years_elem = seller_block.find('p', class_=re.compile("D_bMw.*D_lI"))
-                if years_elem:
-                    text = years_elem.get_text(strip=True)
-                    if "years" in text:
-                        match = re.search(r"(\d+)", text)
-                        years_on_carousell = int(match.group(1)) if match else None
-                    elif "months" in text:
-                        match = re.search(r"(\d+)", text)
-                        years_on_carousell = round(int(match.group(1)) / 12, 2) if match else None
+                    # Extract all <p> tags in that block
+                    all_p_tags = seller_block.find_all('p')
+
+                    for p in all_p_tags:
+                        text = p.get_text(strip=True).lower()
+
+                        # Years on Carousell
+                        if "year" in text or "month" in text:
+                            match = re.search(r"(\d+)", text)
+                            if match:
+                                value = int(match.group(1))
+                                if "year" in text:
+                                    years_on_carousell = value
+                                elif "month" in text:
+                                    years_on_carousell = round(value / 12, 2)
         except Exception as e:
             print("❌ Seller info block error:", e)
 
-        # --- Seller URL ---
+        # --- Rating + Review Count ---
+        review_count = None
+        try:
+            rating_review_p = soup.find('p', string=lambda text: text and "review" in text.lower() and re.search(r"\d+(\.\d+)?", text))
+            if rating_review_p:
+                text = rating_review_p.get_text(strip=True)
+
+                # Rating (e.g., 5.0)
+                rating_match = re.search(r"(\d+\.\d+|\d+)", text)
+                if rating_match:
+                    review_count = float(rating_match.group(1))
+
+        except Exception as e:
+            print("❌ Rating/Review block error:", e)
+
+        seller_rating = None
+        try:
+            # Look for div with aria-label like "5 stars"
+            star_block = soup.find("div", attrs={"aria-label": re.compile(r"\d+(\.\d+)?\s+stars")})
+            if star_block:
+                # Extract rating from aria-label
+                label = star_block["aria-label"]
+                match = re.search(r"(\d+(\.\d+)?)", label)
+                if match:
+                    seller_rating = float(match.group(1))
+        except Exception as e:
+            print("❌ Review extraction error:", e)
+
+        
+
         seller_url = ""
         try:
             seller_url_elem = soup.find("a", href=lambda x: x and "/u/" in x)
@@ -106,12 +132,12 @@ def parse_listing_fields(result):
         except Exception as e:
             print("❌ Seller URL error:", e)
 
+        
         return {
             "sold_status": 1 if "Reserved" in html or "Sold" in html else 0,
             "sold_datetime": datetime.now().isoformat() if "Sold" in html else None,
             "description": description,
             "price": updated_price,
-            "grading": None,
             "seller_url": seller_url,
             "seller_rating": seller_rating,
             "review_count": review_count,
@@ -194,6 +220,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 3):
                 }
                 parsed_listings.append(listing)
                 count += 1
+                print(f"Parsed listing {listing['id']} from {url}: {listing}")
 
         print(f"\nSummary:")
         print(f"  - Successfully crawled: {success_count}")
@@ -218,9 +245,9 @@ def update_db(listings):
 
         cursor.execute('''
             UPDATE listings
-            SET price = ?, sold_status =?, sold_datetime =?, description =?, grading =?, seller_url =?, seller_rating =?, review_count =?, years_on_carousell =?
+            SET price = ?, sold_status =?, sold_datetime =?, description =?, seller_url =?, seller_rating =?, review_count =?, years_on_carousell =?
             WHERE id = ?
-        ''', (listing['price'], listing['sold_status'], listing['sold_datetime'], listing['description'], listing['grading'], listing['seller_url'], listing['seller_rating'], listing['review_count'], listing['years_on_carousell'], listing['id']))
+        ''', (listing['price'], listing['sold_status'], listing['sold_datetime'], listing['description'], listing['seller_url'], listing['seller_rating'], listing['review_count'], listing['years_on_carousell'], listing['id']))
 
     conn.commit()
     conn.close()
@@ -231,12 +258,15 @@ async def main():
     if urls:
         print(f"Found {len(urls)} URLs to crawl")
         listings = await crawl_parallel(urls, max_concurrent=3)
+        send_debug_message_to_telegram(f"{len(listings)} listings crawled successfully.")
+
 
         print(f"Updated {len(listings)} listings in the database.")
         update_db(listings)
 
     else:
         print("No URLs found to crawl")
+        send_debug_message_to_telegram("No URLs found to crawl.")
 
 
 if __name__ == "__main__":

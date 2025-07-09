@@ -7,29 +7,50 @@ from selenium.webdriver.chrome.options import Options
 import time
 import dateparser
 from datetime import datetime
-import os
-import pandas as pd
-from sqlalchemy import create_engine
-import psycopg2
-from config import CAROUSELL_CONFIG, DB_CONFIG
-import re
-from helper import log_output
+import sys
+from config import CAROUSELL_CONFIG
+import sqlite3
+from helper import extract_price, save_to_sqlite
+from ai_process import ai_filter,chunk_ai_process
+from telebot import send_ai_results_to_telegram, send_debug_message_to_telegram
+from selenium.webdriver.common.proxy import Proxy, ProxyType
+import random
 
-log_output()
+
 
 # Configuration from config file
-SCRAP_DURATION = ["1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
-
-options = Options()
-options.add_argument('--log-level=3')  
-options.add_experimental_option("excludeSwitches", ["enable-logging"]) 
-service = Service()  
-driver = webdriver.Chrome(service=service, options=options)
-driver.get(CAROUSELL_CONFIG['url'])
+SCRAP_DURATION = "1 day ago" # ["12 hours ago, 1 day ago", "2 days ago", "3 days ago", "4 days ago", "week ago"]
+TOP_FILTER_PERCENT = 0.3
 
 listings = []
 current_date = datetime.today().date()
 timestamp = datetime.now()
+
+# if 1 <= timestamp.hour < 7:
+#     print("⏱️ Between midnight and 1 AM. Exiting...")
+#     sys.exit()
+
+options = Options()
+user_agents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113 Safari/537.36"
+]
+options.add_argument(f'user-agent={random.choice(user_agents)}')
+options.add_argument('--headless=new')  # Use 'new' headless mode
+options.add_argument('--disable-blink-features=AutomationControlled')
+options.add_argument('--window-size=1920,1080')
+options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115 Safari/537.36')
+
+service = Service()  
+
+driver = webdriver.Chrome(service=service, options=options)
+driver.get(CAROUSELL_CONFIG['url'])
+
+
+def human_delay(a=0.5, b=1.5):
+    time.sleep(random.uniform(a, b))
+
 
 def scroll_to_bottom():
     last_height = driver.execute_script("return document.body.scrollHeight")
@@ -49,16 +70,7 @@ def scroll_to_top():
     driver.execute_script("window.scrollTo(0, 0);")
     time.sleep(1)  
 
-def extract_price(price_str):
-    if not price_str:
-        return None
-    # Extract digits and remove S$, commas, etc.
-    cleaned = re.sub(r"[^\d]", "", price_str)
-    return int(cleaned) if cleaned.isdigit() else None
 
-def extract_listing_id(url: str) -> str:
-    match = re.search(r'/p/[^/]+-(\d+)', url)
-    return match.group(1) if match else None
 
 # ----------------------------------------------------------------------------------------------------------
 
@@ -83,6 +95,16 @@ def extract_listing_id(url: str) -> str:
 
 # ------------------------------ Create Filter and Sorting ---------------------------------
 
+WebDriverWait(driver, 20).until(
+    EC.presence_of_element_located((By.XPATH, '//div[starts-with(@data-testid, "listing-card-")]'))
+)
+
+html = driver.page_source
+if "Just a moment..." in html:
+    print("⚠️ You are being blocked by Cloudflare.")
+    print(driver.page_source[:1000])
+    driver.quit()
+
 # Filter Laptops "Like new"
 filter_button = driver.find_element(By.XPATH, '//button[.//span[text()="More filters"]]')
 driver.execute_script("arguments[0].click();", filter_button)
@@ -90,7 +112,12 @@ driver.execute_script("arguments[0].click();", filter_button)
 recent_button = driver.find_element(By.XPATH, '//label[.//p[text()="Recent"]]')
 driver.execute_script("arguments[0].click();", recent_button)
 
+price_input = driver.find_element(By.NAME, "field_price_start")
+price_input.clear()  # Clear any existing text
+price_input.send_keys("1800")
+
 scroll_to_bottom()
+human_delay()
 
 condition_button = driver.find_element(By.XPATH, '//button[.//span[text()="Condition"]]')
 driver.execute_script("arguments[0].click();", condition_button)
@@ -116,6 +143,7 @@ stop_scraping = False
 stop_loading = False
 
 while not stop_loading:
+    human_delay()
     cards = driver.find_elements(By.XPATH, '//div[starts-with(@data-testid, "listing-card-")]')
     for card in cards:
         card_num += 1
@@ -123,6 +151,8 @@ while not stop_loading:
             driver.execute_script("arguments[0].scrollIntoView();", card)
             try:
                 date_elem = card.find_element(By.XPATH, './/p[contains(., "ago")]').text
+                listing_datetime = dateparser.parse(date_elem)
+
             except Exception as e:
                 print("Could not find date for card")
                 print("HTML:", card.get_attribute('outerHTML'))
@@ -130,8 +160,9 @@ while not stop_loading:
             # Stop scrolling if it says "2 days ago" or more
             # print(date_elem, SCRAP_DURATION[CAROUSELL_CONFIG['scrap_days']-1], date_elem == SCRAP_DURATION[CAROUSELL_CONFIG['scrap_days']-1])
             try:
-                if date_elem == "2 hours ago":
-                    print("Stop scrolling — listing is too old:", date_elem)
+                threshold_datetime  = dateparser.parse(SCRAP_DURATION)
+                if listing_datetime <= threshold_datetime :
+                    print("Stop scrolling — listing is too old:", listing_datetime)
                     stop_loading = True
                     break
             except Exception as e:
@@ -162,6 +193,7 @@ scroll_to_top()
 cards = driver.find_elements(By.XPATH, '//div[starts-with(@data-testid, "listing-card-")]')
 # Loop through all cards and extract data
 for i in range(card_num):
+    human_delay()
     print( "Processing card", i)
     try:
         # Optional: scroll into view to load dynamic content like price
@@ -174,6 +206,7 @@ for i in range(card_num):
         url = link_elem.get_attribute('href')
         price_element = cards[i].find_element(By.XPATH, './/p[contains(text(),"$")]')
         price = extract_price(price_element.text) if price_element else "N/A"
+        img = cards[i].find_element(By.XPATH, './/img[contains(@src, "https://")]')
 
         try:
             condition_elem = cards[i].find_element(
@@ -203,26 +236,24 @@ for i in range(card_num):
             print("HTML:", cards[i].get_attribute('outerHTML'))
             listing_date = "Unknown"
 
-        if (listing_date != current_date and listing_date != "Unknown")  or i >= card_num:
-            print("Reached end of listings for today.")
-            stop_scraping = True
-            break  # Stop if listing date is not current date
-
         # print(f"Title: {title.text}, Price: {price}, Condition: {condition}, URL: {url}, Date: {listing_date}, Likes: {like_num}")
 
-        if price and price >= 59:
+        if (price and price >= 59):
             listings.append({
+                "temp_id": i,
                 "timestamp": timestamp,
-                "listing_date": listing_date,
                 "title": title.text,
                 "price": price,
                 "condition": condition,
                 "likes": like_num,
                 "sold_status": "Available",
-                "url": url
+                "url": url,
+                "img": img.text,
+                "grading": 0
             })
 
         else:
+            print(f"Price: {price}")
             print("Skipped listing due to likely false listing")
 
     except Exception as e:
@@ -232,48 +263,33 @@ print("Reached end of listings for today.")
 driver.quit()
 
 
+# ---------- AI Filtering -----------------
+
+def run_ai_filter_with_retry(data, max_retries=3):
+    retries = 0
+    while retries < max_retries:
+        result = chunk_ai_process(data)
+        if result:  # success
+            return result
+        retries += 1
+        print(f"⚠️ Retry {retries}/{max_retries}... AI response failed.")
+    print("❌ AI failed after max retries.")
+    send_debug_message_to_telegram(f"❌ AI failed after max retries.")
+    return []
+
+ai_filtered_listings = run_ai_filter_with_retry(listings, TOP_FILTER_PERCENT)
+filtered_listings = []
+for scored in ai_filtered_listings:
+    for listing in listings:
+        if scored['temp_id'] == listing['temp_id']:
+            listing['grading'] = scored['score']
+            print(f"Listing {listing['temp_id']} passed AI filter with score {listing['grading']}")
+            filtered_listings.append(listing)
+            break
+send_ai_results_to_telegram(filtered_listings)
+
 
 # ------------------------------ Data Validation and Database Integration -----------------
 
-
-def validate_listing(listing):
-    """Validate required fields in a listing"""
-    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
-    return all(field in listing and listing[field] for field in required_fields)
-
-
-def save_to_db(listings):
-    """Save validated listings to PostgreSQL database"""
-    
-    # Create SQLAlchemy engine
-    engine = create_engine(f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
-    
-    # Convert to DataFrame and filter valid listings
-    valid_listings = [listing for listing in listings if validate_listing(listing)]
-    df = pd.DataFrame(valid_listings)
-    df['listing_id'] = df['url'].apply(extract_listing_id)
-    df = df[df['listing_id'].notnull()]
-    # df = df[df['price'].notnull()]
-    # df = df[df['price'] >= 59]
-    
-    # Save to database
-    try:
-        df.to_sql('listings', engine, if_exists='append', index=False)
-        print(f"Successfully saved {len(valid_listings)} listings to database")
-    except Exception as e:
-        print(f"Error saving to database: {str(e)}")
-
-# Convert to DataFrame
-def save_to_csv(listings):
-    df = pd.DataFrame(listings)
-    csv_file = f"{CAROUSELL_CONFIG['category']}_history.csv"
-    if os.path.exists(csv_file):
-        df.to_csv(csv_file, mode='a', index=True, header=False)
-    else:
-        df.to_csv(csv_file, mode='w', index=True, header=[ "date","title", "price", "condition", "likes", "url"])
-
-    print("Appended today's listings to:", csv_file)
-
 # Save listings to database
-save_to_db(listings)
-# save_to_csv(listings)
+save_to_sqlite(filtered_listings)

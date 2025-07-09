@@ -1,0 +1,7 @@
+venv/
+.env
+.history/
+_pycache_/
+carousell_laptops.db
+carousell_dump.sql
+backup/

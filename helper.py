@@ -3,12 +3,13 @@ import sqlite3
 import os
 import pandas as pd
 from datetime import datetime
+import logging
 
 timestamp = datetime.now()
 
 def validate_listing(listing):
     """Validate required fields in a listing"""
-    required_fields = ['listing_date', 'title', 'price', 'condition', 'url']
+    required_fields = ['timestamp', 'title', 'price', 'condition', 'url']
     return all(field in listing and listing[field] for field in required_fields)
 
 
@@ -102,8 +103,8 @@ def save_to_sqlite(listings):
     for item in valid_listings:
         c.execute('''
             INSERT INTO listings 
-            (datetime, title, price, condition, likes, listing_url, sold_status, thumbnail_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (datetime, title, price, condition, likes, listing_url, sold_status, thumbnail_url, grading)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             timestamp.isoformat(),
             item['title'],
@@ -112,7 +113,8 @@ def save_to_sqlite(listings):
             item['likes'],
             item['url'],
             0,
-            item['img']
+            item['img'],
+            item['grading']
         ))
 
     conn.commit()
@@ -124,11 +126,13 @@ def save_to_sqlite(listings):
             f.write('%s\n' % line)
     print("Dumped database to carousell_dump.sql")
 
-    with open(os.path.join('backup', f'backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql'), 'w', encoding='utf-8') as f:
+    os.makedirs('backup', exist_ok=True)
+    backup_filename = f'backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql'
+    backup_path = os.path.join('backup', backup_filename)
+    with open(backup_path, 'w', encoding='utf-8') as f:
         for line in conn.iterdump():
             f.write('%s\n' % line)
-    print(f"Backup saved to backup/backup_{timestamp.strftime("%Y-%m-%d_%H-%M-%S")}.sql")
-    conn.close()
+    print(f"Backup saved to {backup_path}")
 
 
 def save_to_csv(listings):
@@ -151,3 +155,12 @@ def load_from_db(fetch_until):
     rows = c.fetchall()
     conn.close()
     return rows
+
+def log_output():
+    logging.basicConfig(
+        filename='C:/Users/yongz/scraper_log.txt',
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+    logging.info("Scraper started")
